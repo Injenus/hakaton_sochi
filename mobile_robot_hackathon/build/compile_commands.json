@@ -1,0 +1,7 @@
+[
+{
+  "directory": "/home/inj/uart_connection_by_python/build",
+  "command": "/usr/bin/gcc  -I/home/inj/uart_connection_by_python/src -g -o CMakeFiles/uart_connection_by_python.dir/src/main.c.o -c /home/inj/uart_connection_by_python/src/main.c",
+  "file": "/home/inj/uart_connection_by_python/src/main.c"
+}
+]

@@ -1,0 +1,1 @@
+/usr/bin/gcc -g CMakeFiles/uart_connection_by_python.dir/src/main.c.o -o uart_connection_by_python 

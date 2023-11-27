@@ -1,0 +1,3 @@
+/home/inj/uart_connection_by_python/build/CMakeFiles/uart_connection_by_python.dir
+/home/inj/uart_connection_by_python/build/CMakeFiles/edit_cache.dir
+/home/inj/uart_connection_by_python/build/CMakeFiles/rebuild_cache.dir
