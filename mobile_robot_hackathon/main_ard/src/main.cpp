@@ -50,6 +50,7 @@ const uint8_t MODE = 1;
 #define DATA_NRF 6
 #define EEP_ADDR 0
 #define ERROR_ADR 100
+#define PLAT_STAT_ADR 150
 
 struct Timer
 {
@@ -72,8 +73,8 @@ Timer tmr;
 struct Period
 {
   const uint32_t main = 0;
-  const uint32_t tx = 24;
-  const uint32_t rx = 8;
+  const uint32_t tx = 200;
+  const uint32_t rx = 50;
   const uint32_t nrf_t = 5;
   const uint32_t nrf_r = 5;
   const uint32_t set_wheel = 11;
@@ -110,15 +111,15 @@ struct Multiplexor
 {
   const uint8_t s_ctrl[CTRL_MLTX] = {15, 16, 17}; // A1 A2 A3  //num.mltx_ctrl
   const uint8_t sig = 14;                         // A0
-  const uint8_t ir[NUM_IR][CTRL_MLTX] = {         // num.ir  //num.mltx_ctrl
+  uint8_t ir[NUM_IR][CTRL_MLTX] = {               // num.ir  //num.mltx_ctrl
       {0, 0, 0},
       {1, 0, 0}};
-  const uint8_t end_sens[NUM_END][CTRL_MLTX] = { // num.end_sens  //num.mltx_ctrl
+  uint8_t end_sens[NUM_END][CTRL_MLTX] = { // num.end_sens  //num.mltx_ctrl
       {0, 1, 0},
       {1, 1, 0},
       {0, 0, 1},
       {1, 0, 1}};
-  int8_t pin_mode = 0;
+  uint8_t pin_mode = 0;
 };
 
 struct Pin
@@ -198,14 +199,14 @@ Receive rx;
 
 struct Buff
 {
-  volatile uint8_t rx[11] = {0, 0, 0, 110, 0, 90, 0, 45, 0, 60, 0}; // hsum + 2*1 + 3*2 + 2*1
-  volatile uint8_t two_bytes[2];
-  volatile uint8_t tx[48]; // hsum + 22*2+2
-  volatile uint8_t tx_add[16];
-  volatile uint8_t nrf_rec[12];
+  uint8_t rx[11] = {0, 0, 0, 110, 0, 90, 0, 45, 0, 60, 0}; // hsum + 2*1 + 3*2 + 2*1
+  uint8_t two_bytes[2];
+  uint8_t tx[48]; // hsum + 22*2+2
+  uint8_t tx_add[16];
+  uint8_t nrf_rec[12];
 };
 Buff buff;
-volatile bool rx_flag = false;
+bool rx_flag = false;
 
 struct Pid
 {
@@ -274,12 +275,15 @@ struct Platform
   int16_t target_val = 0;
   // bool is_done_move = false;
   uint32_t tmr[5] = {0, 0, 0, 0, 0};
-  uint32_t prd[5] = {750, 750, 750, 3600000, 3600000};
+  uint32_t prd[5] = {100, 100, 750, 3600000, 3600000};
   int16_t stop[WHEEL_NUM] = {0, 0};
-  int16_t forw[WHEEL_NUM] = {wheel.max_spd * 0.005, -wheel.max_spd * 0.005};
-  int16_t backw[WHEEL_NUM] = {wheel.min_spd * 0.005, -wheel.min_spd * 0.005};
+  int16_t forw[WHEEL_NUM] = {int16_t(float(wheel.max_spd) * 0.005), int16_t(float(-wheel.max_spd) * 0.005)};
+  int16_t backw[WHEEL_NUM] = {int16_t(float(wheel.min_spd) * 0.005), int16_t(float(-wheel.min_spd) * 0.005)};
   int8_t direc = -1;
   int16_t cur_speed_pid = 0;
+  int16_t ang_err = 0;
+  int16_t add_speed = 0;
+  int16_t status = -1;
 };
 Platform plat;
 
@@ -332,6 +336,7 @@ void buff_to_tx_buff(uint8_t *ind, uint8_t *int_buff);
 void set_PWM_wheel(int16_t left_sp, int16_t right_sp);
 void set_directly_wheel(int16_t left_val, int16_t right_val);
 int16_t convertSpeedToVal(int16_t speed_);
+int16_t add_speed(int16_t err);
 void setup_wh();
 /*
  *  не регаируем на поток байтов, пока не увидим #
@@ -353,6 +358,7 @@ void setup()
   // №№№№№№№№№№№№№№№№№№№№№№
 
   EEPROM.get(EEP_ADDR, rx); // прочитать из адреса - явно и верно задаем наш первый "прочитыннй" пакет
+  EEPROM.get(PLAT_STAT_ADR, plat.status);
 
   if (MODE < 2)
   {
@@ -416,23 +422,23 @@ void setup()
   pid_right.kd = 0;
 
   pid_gen.kp = 20;
-  pid_gen.ki = 0;
-  pid_gen.kd = 100;
+  pid_gen.ki = 100;
+  pid_gen.kd = 1000;
   pid_gen.minOut = 100;
   pid_gen.maxOut = 1000;
   pid_gen.dt = 20;
 
   set_buzz(1);
-
   delay(100);
   set_buzz(0);
-  for (uint8_t i = 0; i < 15; i++)
+  for (uint8_t i = 0; i < 17; i++)
   {
     digitalWrite(2, 1);
     delay(800);
     digitalWrite(2, 0);
     delay(200);
   }
+  set_buzz(2);
   Watchdog.enable(INTERRUPT_RESET_MODE, WDT_PRESCALER_128); // Комбинированный режим , таймаут ~1c
 }
 
@@ -514,43 +520,44 @@ void loop()
       {
         digitalWrite(3, 0);
         // если зaвершили предыдущее движение, то делаем иниты для движения
-        plat.target_type = constrain(rx.move_type, 0, 5);
+        plat.target_type = constrain(rx.move_type, 0, 6);
         plat.loc_init_ang[2] = tx.ang_z;
         rx.move_type = 0;
-        // if (rx.val_move > 0)
-        // {
-        //   if (plat.target_type != 3)
-        //   {
-        //     plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 - 100;
-        //   }
-        //   else
-        //   {
-        //     plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 - 220;
-        //   }
-        //   plat.direc = 1;
-        // }
-        // else
-        // {
-        //   if (plat.target_type != 3)
-        //   {
-        //     plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 + 100;
-        //   }
-        //   else
-        //   {
-        //     plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 + 220;
-        //   }
-        //   plat.direc = 0;
-        // }
         if (rx.val_move > 0)
         {
-          plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 - 100;
+          if (plat.target_type != 3)
+          {
+            plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 - 100;
+          }
+          else
+          {
+            plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 - 210;
+          }
           plat.direc = 1;
         }
         else
         {
-          plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 + 100;
+          if (plat.target_type != 3)
+          {
+            plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 + 100;
+          }
+          else
+          {
+            plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 + 210;
+          }
           plat.direc = 0;
         }
+        // *****************************************************
+        // if (rx.val_move > 0)
+        // {
+        //   plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 - 100;
+        //   plat.direc = 1;
+        // }
+        // else
+        // {
+        //   plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 + 100;
+        //   plat.direc = 0;
+        // }
         // plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17; // 17.453  Ded to Mrad
         if (plat.target_val < 0)
         {
@@ -570,20 +577,21 @@ void loop()
         // plat.is_done_move = false;
         tx.mode_move = 0;
       }
-      else if (tx.mode_move == 0) // а если не завершили, то делаем движение, че ждём-то
+      if (tx.mode_move == 0) // а если не завершили, то делаем движение, че ждём-то  // else
       {
         digitalWrite(3, 1);
         digitalWrite(2, !plat.target_type);
         switch (plat.target_type)
         {
         case 0: // stop
-          set_PWM_wheel(plat.stop[0], plat.stop[1]);
-          if (millis() - plat.tmr[plat.target_type] > plat.prd[plat.target_type])
-          {
-            // plat.is_done_move = true;
-            tx.mode_move = 1;
-            set_PWM_wheel(plat.stop[0], plat.stop[1]);
-          }
+          //set_PWM_wheel(plat.stop[0], plat.stop[1]);
+          tx.mode_move = 1;
+          // if (millis() - plat.tmr[plat.target_type] > plat.prd[plat.target_type])
+          // {
+          //   // plat.is_done_move = true;
+          //   tx.mode_move = 1;
+          //   set_PWM_wheel(plat.stop[0], plat.stop[1]);
+          // }
           break;
         case 1: // прямо по углу z
           // set_PWM_wheel(plat.forw[0], plat.forw[1]);
@@ -597,33 +605,68 @@ void loop()
 
           // pid_left.pid(tx.ang_z, plat.loc_init_ang[2], false);
           // pid_right.pid(tx.ang_z, plat.loc_init_ang[2], false);
-          pid_gen.dt = 20;
-          plat.cur_speed_pid = pid_gen.pid(tx.ang_z, plat.loc_init_ang[2], false);
 
-          set_PWM_wheel(plat.cur_speed_pid, 0 - plat.cur_speed_pid);
+          // pid_gen.dt = 20;
+          // plat.cur_speed_pid = pid_gen.pid(tx.ang_z, plat.loc_init_ang[2], false);
+          // set_PWM_wheel(plat.cur_speed_pid, 0 - plat.cur_speed_pid);
 
-          if (millis() - plat.tmr[plat.target_type] > plat.prd[plat.target_type])
+          plat.ang_err = plat.loc_init_ang[2] - tx.ang_z;
+          plat.add_speed = add_speed(plat.ang_err);
+          if (plat.ang_err < 0) // ускоряем правое!!
+          {
+            set_PWM_wheel(plat.forw[0], plat.forw[1] - plat.add_speed);
+          }
+          else // усореем левое!!
+          {
+            set_PWM_wheel(plat.forw[0] + plat.add_speed, plat.forw[1]);
+          }
+
+          if (millis() - plat.tmr[plat.target_type] > plat.prd[plat.target_type] * rx.val_move)
           {
             // plat.is_done_move = true;
             tx.mode_move = 1;
             set_PWM_wheel(plat.stop[0], plat.stop[1]);
-            pid_gen.pid(tx.ang_z, plat.loc_init_ang[2], true);
+            // pid_gen.pid(tx.ang_z, plat.loc_init_ang[2], true);
+            plat.status = plat.target_type + 10;
           }
           break;
         case 2: // назад по углу z
-          // set_PWM_wheel(plat.backw[0], plat.backw[1]);
-          // set_directly_wheel(mg996.stop_v - mg996.dead_zone, mg996.stop_v + mg996.dead_zone);
+                // set_PWM_wheel(plat.backw[0], plat.backw[1]);
+                // set_directly_wheel(mg996.stop_v - mg996.dead_zone, mg996.stop_v + mg996.dead_zone);
 
           /*calc PID, then Set*/
-          plat.cur_speed_pid = pid_gen.pid(tx.ang_z, plat.loc_init_ang[2], false);
-          set_PWM_wheel(0 - plat.cur_speed_pid, plat.cur_speed_pid);
+          // plat.cur_speed_pid = pid_gen.pid(tx.ang_z, plat.loc_init_ang[2], false);
+          // set_PWM_wheel(0 - plat.cur_speed_pid, plat.cur_speed_pid);
 
-          if (millis() - plat.tmr[plat.target_type] > plat.prd[plat.target_type])
+          plat.ang_err = plat.loc_init_ang[2] - tx.ang_z;
+          plat.add_speed = add_speed(plat.ang_err);
+          if (plat.ang_err < 0) // ускоряем левое!!!
+          {
+            set_PWM_wheel(plat.backw[0] - plat.add_speed, plat.backw[1]);
+          }
+          else // усореем правое!!!!
+          {
+            set_PWM_wheel(plat.backw[0], plat.backw[1] + plat.add_speed);
+          }
+
+          if (millis() - plat.tmr[plat.target_type] > plat.prd[plat.target_type] * rx.val_move)
           {
             // plat.is_done_move = true;
             tx.mode_move = 1;
             set_PWM_wheel(plat.stop[0], plat.stop[1]);
-            pid_gen.pid(tx.ang_z, plat.loc_init_ang[2], true);
+            // pid_gen.pid(tx.ang_z, plat.loc_init_ang[2], true);
+            plat.status = plat.target_type + 10;
+          }
+          break;
+        case 6: // вперёд по дефолтам
+          set_directly_wheel(mg996.stop_v + mg996.dead_zone, mg996.stop_v - mg996.dead_zone);
+          if (millis() - plat.tmr[plat.target_type] > plat.prd[plat.target_type] * rx.val_move)
+          {
+            // plat.is_done_move = true;
+            tx.mode_move = 1;
+            set_PWM_wheel(plat.stop[0], plat.stop[1]);
+            // pid_gen.pid(tx.ang_z, plat.loc_init_ang[2], true);
+            plat.status = plat.target_type + 10;
           }
           break;
         case 3: // вращение вокруг центра оси  ang>=0 - gj  час.  ang<0 - ghjn час.
@@ -636,6 +679,7 @@ void loop()
               // plat.is_done_move = true;
               tx.mode_move = 1;
               set_PWM_wheel(plat.stop[0], plat.stop[1]);
+              plat.status = plat.target_type + 10;
             }
           }
           else if (plat.direc == 1)
@@ -647,6 +691,7 @@ void loop()
               // plat.is_done_move = true;
               tx.mode_move = 1;
               set_PWM_wheel(plat.stop[0], plat.stop[1]);
+              plat.status = plat.target_type + 10;
             }
           }
           break;
@@ -660,6 +705,7 @@ void loop()
               // plat.is_done_move = true;
               tx.mode_move = 1;
               set_PWM_wheel(plat.stop[0], plat.stop[1]);
+              plat.status = plat.target_type + 10;
             }
           }
           else if (plat.direc == 1)
@@ -671,6 +717,7 @@ void loop()
               // plat.is_done_move = true;
               tx.mode_move = 1;
               set_PWM_wheel(plat.stop[0], plat.stop[1]);
+              plat.status = plat.target_type + 10;
             }
           }
           break;
@@ -684,6 +731,7 @@ void loop()
               // plat.is_done_move = true;
               tx.mode_move = 1;
               set_PWM_wheel(plat.stop[0], plat.stop[1]);
+              plat.status = plat.target_type + 10;
             }
           }
           else if (plat.direc == 1)
@@ -695,6 +743,7 @@ void loop()
               // plat.is_done_move = true;
               tx.mode_move = 1;
               set_PWM_wheel(plat.stop[0], plat.stop[1]);
+              plat.status = plat.target_type + 10;
             }
           }
           break;
@@ -862,6 +911,10 @@ void rx_uart()
         }
       }
     }
+    else
+    {
+      Serial.flush();
+    }
   }
   else if (MODE == 2)
   {
@@ -983,13 +1036,13 @@ void set_mltx(uint8_t *mode, uint8_t *val_map)
 void get_mltx()
 {
   tx.ir = 0b00000000;
-  for (uint8_t i = 0; i < NUM_IR; i++)
+  for (int8_t i = 0; i < NUM_IR; i++)
   {
     set_mltx(&pin.mltx.pin_mode, pin.mltx.ir[i]);
     tx.ir = tx.ir | (digitalRead(pin.mltx.sig) << i);
   }
   tx.end_sens = 0b00000000;
-  for (uint8_t i = 0; i < NUM_END; i++)
+  for (int8_t i = 0; i < NUM_END; i++)
   {
     set_mltx(&pin.mltx.pin_mode, pin.mltx.end_sens[i]);
     tx.end_sens = tx.end_sens | (digitalRead(pin.mltx.sig) << i);
@@ -1152,7 +1205,7 @@ void fill_tx_arr()
   from_int16(tx.lidar_dist, buff.two_bytes);
   buff_to_tx_buff(&i, buff.two_bytes);
   // sonar
-  from_int16(tx.sonar_1, buff.two_bytes);
+  from_int16(plat.status, buff.two_bytes);
   buff_to_tx_buff(&i, buff.two_bytes);
   // from_int16(tx.sonar_2, buff.two_bytes);   //check_time_wh
   from_int16(int16_t(check_time_wh), buff.two_bytes); // check_time_wh
@@ -1176,14 +1229,13 @@ void set_buzz(uint8_t mode)
     digitalWrite(pin.buzz, 0);
     break;
   case 2:
+    digitalWrite(pin.buzz, 0);
+    delay(50);
     digitalWrite(pin.buzz, 1);
     delay(100);
     digitalWrite(pin.buzz, 0);
-    delay(200);
+    delay(50);
     digitalWrite(pin.buzz, 1);
-    delay(100);
-    digitalWrite(pin.buzz, 0);
-    delay(200);
     break;
   }
 }
@@ -1194,31 +1246,17 @@ void setup_wh()
   {
     digitalWrite(3, 0);
     // если зaвершили предыдущее движение, то делаем иниты для движения
-    plat.target_type = constrain(rx.move_type, 0, 5);
+    // plat.target_type = constrain(rx.move_type, 0, 5);
     plat.loc_init_ang[2] = tx.ang_z;
     rx.move_type = 0;
     if (rx.val_move > 0)
     {
-      if (plat.target_type != 3)
-      {
-        plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 - 100;
-      }
-      else
-      {
-        plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 - 220;
-      }
+      plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 - 190;
       plat.direc = 1;
     }
     else
     {
-      if (plat.target_type != 3)
-      {
-        plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 + 100;
-      }
-      else
-      {
-        plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 + 220;
-      }
+      plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17 + 190;
       plat.direc = 0;
     }
     // plat.target_val = plat.loc_init_ang[2] + rx.val_move * 17; // 17.453  Ded to Mrad
@@ -1429,11 +1467,27 @@ int16_t convertSpeedToVal(int16_t speed_)
   return val;
 }
 
+int16_t add_speed(int16_t err) // этой функцией только генерим ускорилку для колеса!!!!!!!!!!!
+{                              // ошибк - разность  из цели и курента (цель - куррент)
+  int16_t add_value = 0;
+  if (err < 0) // значит ускоряем првое!!!!, но здесь это не важно!!!
+  {
+    err = 0 - err;
+  }
+  add_value = 3 * err;
+  if (add_value > 1000)
+  {
+    add_value = 1000;
+  }
+  return add_value;
+}
+
 // /* Первый тайм-аут вызывает прерывание */
 ISR(WATCHDOG)
 {
-  set_buzz(2);
+  set_buzz(1);
   EEPROM.put(EEP_ADDR, rx);
+  EEPROM.put(PLAT_STAT_ADR, plat.status);
   // Serial.println("warning!");
   // Если исправить причину не вышло - следующий таймаут вызывает сброс
   // Watchdog.enable(INTERRUPT_RESET_MODE, WDT_PRESCALER_128); // Если перенастроить watchdog здесь - сброса не будет

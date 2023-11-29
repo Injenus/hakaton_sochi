@@ -2,7 +2,7 @@
 #include "nRF24L01.h"
 #include "RF24.h"
 
-RF24 radio(7, 8); 
+RF24 radio(9, 10); 
 //RF24 radio(9,53); // Для Меги
 
 const uint8_t num_channels = 128;

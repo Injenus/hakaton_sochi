@@ -4,7 +4,7 @@ import struct
 from PyQt5 import QtWidgets, uic
 from PyQt5.QtSerialPort import QSerialPort, QSerialPortInfo
 from PyQt5.QtCore import QIODevice
-from PyQt5.QtCore import QBitArray
+from PyQt5.QtCore import QTimer
 '''
 PROTOCOL:  <#><Hash-Sum><byte>..<byte>
 Hash-Sum is 8-bit number
@@ -37,10 +37,26 @@ type_move, val_move = 1, 15
 arm_xyz_mode = [21, 10, 25, 1]
 audio_mode = 5
 
+is_run = True
+send_timer = time.time()
+send_period = 0.1
+
+ctrl_list = [[1, 5], [3, 30], [3, -30], [3, 90], [3, -60]]
+count = 0
+
+
+def infinite_loop_function():
+    global is_run
+
+    while is_run:
+        # Ваш код для бесконечного цикла
+        print("Infinite Loop Function")
+        
+
+
+
 def get_data_int_to_tx(type_move,val_move,x,y,z,mode,audio):
     return [type_move,val_move,x,y,z,mode,audio]
-
-
 
 
 # ser = serial.Serial('/dev/ttyACM0', 115200)
@@ -297,7 +313,10 @@ ui.send_test_data.clicked.connect(send_test_data)
 # serial.readyRead.connect(receive_data) real_rec_data
 serial.readyRead.connect(real_rec_data)
 ###
-
+# Создайте QTimer для запуска бесконечного цикла
+# infinite_loop_timer = QTimer()
+# infinite_loop_timer.timeout.connect(infinite_loop_function)
+# infinite_loop_timer.start(1000)  # Интервал в миллисекундах (100 мс)
 
 ui.show()
 app.exec()
@@ -309,4 +328,7 @@ app.exec()
 #         # print(packet)
 # else:
 #     ser.close()
+
+is_run = False
+infinite_loop_timer.stop()
 
